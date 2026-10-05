@@ -11,11 +11,18 @@ from app.auth import current_user, hash_password, make_token, verify_password
 from app.database import get_db
 from app.models import Expense, Project, User
 
+
 app = FastAPI(title="Construction Expense Tracker")
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "https://construction-expense-tracker-nu.vercel.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -66,8 +73,13 @@ class ProjectSummary(BaseModel):
 
 def get_my_project(db: Session, project_id: int, user: User) -> Project:
     project = db.get(Project, project_id)
+
     if project is None or project.owner_id != user.id:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found"
+        )
+
     return project
 
 
@@ -77,107 +89,219 @@ def home():
 
 
 @app.post("/register", response_model=TokenOut)
-def register(data: Credentials, db: Session = Depends(get_db)):
-    # Only one account can ever be created: yours.
+def register(
+    data: Credentials,
+    db: Session = Depends(get_db)
+):
     if db.scalar(select(func.count(User.id))) > 0:
-        raise HTTPException(status_code=403, detail="Registration is closed")
-    user = User(email=data.email.strip().lower(), password_hash=hash_password(data.password))
+        raise HTTPException(
+            status_code=403,
+            detail="Registration is closed"
+        )
+
+    user = User(
+        email=data.email.strip().lower(),
+        password_hash=hash_password(data.password)
+    )
+
     db.add(user)
     db.commit()
     db.refresh(user)
-    # Existing projects become yours.
-    db.execute(update(Project).where(Project.owner_id.is_(None)).values(owner_id=user.id))
+
+    db.execute(
+        update(Project)
+        .where(Project.owner_id.is_(None))
+        .values(owner_id=user.id)
+    )
+
     db.commit()
+
     return TokenOut(token=make_token(user.id))
 
 
 @app.post("/login", response_model=TokenOut)
-def login(data: Credentials, db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == data.email.strip().lower()))
-    if user is None or not verify_password(data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Wrong email or password")
+def login(
+    data: Credentials,
+    db: Session = Depends(get_db)
+):
+    user = db.scalar(
+        select(User).where(
+            User.email == data.email.strip().lower()
+        )
+    )
+
+    if user is None or not verify_password(
+        data.password,
+        user.password_hash
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Wrong email or password"
+        )
+
     return TokenOut(token=make_token(user.id))
 
 
 @app.get("/has-user")
 def has_user(db: Session = Depends(get_db)):
-    return {"has_user": db.scalar(select(func.count(User.id))) > 0}
+    return {
+        "has_user": db.scalar(
+            select(func.count(User.id))
+        ) > 0
+    }
 
 
 @app.post("/projects", response_model=ProjectOut)
 def create_project(
-    data: ProjectIn, db: Session = Depends(get_db), user: User = Depends(current_user)
+    data: ProjectIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user)
 ):
-    project = Project(owner_id=user.id, **data.model_dump())
+    project = Project(
+        owner_id=user.id,
+        **data.model_dump()
+    )
+
     db.add(project)
     db.commit()
     db.refresh(project)
+
     return project
 
 
 @app.get("/projects", response_model=list[ProjectOut])
-def list_projects(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    stmt = select(Project).where(Project.owner_id == user.id).order_by(Project.id)
+def list_projects(
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user)
+):
+    stmt = (
+        select(Project)
+        .where(Project.owner_id == user.id)
+        .order_by(Project.id)
+    )
+
     return db.scalars(stmt).all()
 
 
-@app.post("/projects/{project_id}/expenses", response_model=ExpenseOut)
+@app.post(
+    "/projects/{project_id}/expenses",
+    response_model=ExpenseOut
+)
 def add_expense(
     project_id: int,
     data: ExpenseIn,
     db: Session = Depends(get_db),
-    user: User = Depends(current_user),
+    user: User = Depends(current_user)
 ):
     get_my_project(db, project_id, user)
-    expense = Expense(project_id=project_id, **data.model_dump())
+
+    expense = Expense(
+        project_id=project_id,
+        **data.model_dump()
+    )
+
     db.add(expense)
     db.commit()
     db.refresh(expense)
+
     return expense
 
 
-@app.get("/projects/{project_id}/expenses", response_model=list[ExpenseOut])
+@app.get(
+    "/projects/{project_id}/expenses",
+    response_model=list[ExpenseOut]
+)
 def list_expenses(
-    project_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user)
 ):
     get_my_project(db, project_id, user)
-    stmt = select(Expense).where(Expense.project_id == project_id).order_by(Expense.expense_date)
+
+    stmt = (
+        select(Expense)
+        .where(Expense.project_id == project_id)
+        .order_by(Expense.expense_date)
+    )
+
     return db.scalars(stmt).all()
 
 
-@app.get("/projects/{project_id}/summary", response_model=ProjectSummary)
+@app.get(
+    "/projects/{project_id}/summary",
+    response_model=ProjectSummary
+)
 def project_summary(
-    project_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user)
 ):
     get_my_project(db, project_id, user)
+
     total = func.sum(Expense.amount)
+
     stmt = (
-        select(Expense.category, total.label("total"))
+        select(
+            Expense.category,
+            total.label("total")
+        )
         .where(Expense.project_id == project_id)
         .group_by(Expense.category)
         .order_by(total.desc())
     )
+
     rows = db.execute(stmt).all()
-    by_category = [CategoryTotal(category=r.category, total=r.total) for r in rows]
-    grand_total = sum((c.total for c in by_category), Decimal("0"))
-    return ProjectSummary(project_id=project_id, grand_total=grand_total, by_category=by_category)
+
+    by_category = [
+        CategoryTotal(
+            category=r.category,
+            total=r.total
+        )
+        for r in rows
+    ]
+
+    grand_total = sum(
+        (c.total for c in by_category),
+        Decimal("0")
+    )
+
+    return ProjectSummary(
+        project_id=project_id,
+        grand_total=grand_total,
+        by_category=by_category
+    )
 
 
-@app.put("/expenses/{expense_id}", response_model=ExpenseOut)
+@app.put(
+    "/expenses/{expense_id}",
+    response_model=ExpenseOut
+)
 def update_expense(
     expense_id: int,
     data: ExpenseIn,
     db: Session = Depends(get_db),
-    user: User = Depends(current_user),
+    user: User = Depends(current_user)
 ):
     expense = db.get(Expense, expense_id)
+
     if expense is None:
-        raise HTTPException(status_code=404, detail="Expense not found")
-    get_my_project(db, expense.project_id, user)
+        raise HTTPException(
+            status_code=404,
+            detail="Expense not found"
+        )
+
+    get_my_project(
+        db,
+        expense.project_id,
+        user
+    )
+
     for key, value in data.model_dump().items():
         setattr(expense, key, value)
+
     db.commit()
     db.refresh(expense)
+
     return expense
 
 
@@ -185,12 +309,23 @@ def update_expense(
 def delete_expense(
     expense_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(current_user),
+    user: User = Depends(current_user)
 ):
     expense = db.get(Expense, expense_id)
+
     if expense is None:
-        raise HTTPException(status_code=404, detail="Expense not found")
-    get_my_project(db, expense.project_id, user)
+        raise HTTPException(
+            status_code=404,
+            detail="Expense not found"
+        )
+
+    get_my_project(
+        db,
+        expense.project_id,
+        user
+    )
+
     db.delete(expense)
     db.commit()
+
     return {"ok": True}
